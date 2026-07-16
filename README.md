@@ -32,7 +32,7 @@ import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
 // Create a component with state
-const _Counter = _make(_State, {
+const _Counter = _make('Counter', _State, {
     increment () {
         this.count += 1;
 
@@ -97,7 +97,7 @@ For computed properties that only need a compute function, you can use the short
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _Person = _make(_State, {}, {
+const _Person = _make('Person', _State, {}, {
     _computed: {
         fullName () {
             return `${this.firstName} ${this.lastName}`.trim();
@@ -132,6 +132,7 @@ const _Person = _make(_State, {}, {
 - **Automatic Dependency Tracking**: Dependencies are detected automatically when the getter runs
 - **Efficient Caching**: Values are cached and only recomputed when dependencies change
 - **Chained Dependencies**: Computed properties can depend on other computed properties
+- **Cross-Object Dependencies**: Computed properties can depend on properties of other state objects and are recomputed when those change (see [Cross-Object Dependencies](#cross-object-dependencies))
 - **Change Events**: Computed properties publish change events just like state properties
 - **Circular Dependency Detection**: Throws an error if circular dependencies are detected
 
@@ -154,7 +155,7 @@ When you need more control, use the full configuration object:
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _User = _make(_State, {
+const _User = _make('User', _State, {
     _normalizeEmail (value) {
         return value ?
             value.toLowerCase().trim() :
@@ -191,7 +192,7 @@ const _User = _make(_State, {
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _Config = _make(_State, {}, {
+const _Config = _make('Config', _State, {}, {
     _state: {
         apiKey: {
             readOnly: 'setOnce',
@@ -225,7 +226,7 @@ const _Config = _make(_State, {}, {
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _ShoppingCart = _make(_State, {}, {
+const _ShoppingCart = _make('ShoppingCart', _State, {}, {
     _computed: {
         subtotal () {
             return this.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -276,7 +277,7 @@ const _ShoppingCart = _make(_State, {}, {
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _ExpensiveComputation = _make(_State, {}, {
+const _ExpensiveComputation = _make('ExpensiveComputation', _State, {}, {
     _computed: {
         // This won't compute until accessed and won't publish change events
         analysis: {
@@ -317,7 +318,7 @@ By default, autoBatchChanges is false. Enable it to batch multiple changes:
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _MyDataObject = _make(_State, {}, {
+const _MyDataObject = _make('MyDataObject', _State, {}, {
     _state: {
         x: {},
         y: {},
@@ -326,7 +327,7 @@ const _MyDataObject = _make(_State, {}, {
 });
 
 {
-    const instance = _MyDataObject({
+    const component = _MyDataObject({
         autoBatchChanges: true,
         x: 0,
         y: 0,
@@ -355,7 +356,7 @@ When the value of a state property is an array or an object, changes to the arra
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _MyState = _make(_State, {}, {
+const _MyState = _make('MyState', _State, {}, {
     _state: {
         data: {}
     }
@@ -384,7 +385,7 @@ Force a computed property to recalculate:
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _RandomValue = _make(_State, {}, {
+const _RandomValue = _make('RandomValue', _State, {}, {
     _computed: {
         random () {
             return Math.random() * this.multiplier;
@@ -418,7 +419,7 @@ Manually control batching when autoBatchChanges is false:
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _MyComponent = _make(_State, {}, {
+const _MyComponent = _make('MyComponent', _State, {}, {
     _state: {
         x: {},
         y: {},
@@ -434,6 +435,177 @@ const _MyComponent = _make(_State, {}, {
     component.y = 2;
     component.z = 3;
     // Single 'change' event for all three after the current turn of the event loop
+}
+```
+
+## Cross-Object Dependencies
+
+Computed properties are not limited to the object they belong to. A computed property can read properties from *other* state objects, and the dependency is tracked across the object boundary. When a property on one object changes, computed properties on any other object that read it are recomputed automatically.
+
+The idiomatic way to give one state object a reference to another is to store that reference as a state property. This matters because of initialization order: a state object's eager computed properties are evaluated while it initializes, before any reference you assign imperatively afterward would exist. Passing the reference in as a state property guarantees it is available the first time the computed property runs.
+
+```javascript
+import _make from 'isotropic-make';
+import _State from 'isotropic-state';
+
+const _Temperature = _make('Temperature', _State, {}, {
+        _state: {
+            celsius: {
+                initFunction: () => 0
+            }
+        }
+    }),
+    _Display = _make('Display', _State, {}, {
+        _computed: {
+            label () {
+                return `${this.temperature.celsius}°C`;
+            }
+        },
+        _state: {
+            temperature: {}
+        }
+    });
+
+{
+    const temperature = _Temperature({
+            celsius: 20
+        }),
+        display = _Display({
+            temperature
+        });
+
+    console.log(display.label); // '20°C'
+
+    temperature.celsius = 25;
+
+    console.log(display.label); // '25°C' (recomputed across objects)
+}
+```
+
+Cross-object dependencies chain and combine exactly like same-object dependencies. A single computed property can read from its own state and from several other objects, and a change to any dependency triggers a recompute:
+
+```javascript
+const _Order = _make('Order', _State, {}, {
+        _state: {
+            quantity: {
+                initFunction: () => 1
+            }
+        }
+    }),
+    _Product = _make('Product', _State, {}, {
+        _state: {
+            price: {
+                initFunction: () => 0
+            }
+        }
+    }),
+    _LineItem = _make('LineItem', _State, {}, {
+        _computed: {
+            total () {
+                return this.order.quantity * this.product.price;
+            }
+        },
+        _state: {
+            order: {},
+            product: {}
+        }
+    });
+
+{
+    const order = _Order({
+            quantity: 3
+        }),
+        product = _Product({
+            price: 10
+        }),
+        lineItem = _LineItem({
+            order,
+            product
+        });
+
+    console.log(lineItem.total); // 30
+
+    product.price = 12;
+
+    console.log(lineItem.total); // 36
+
+    order.quantity = 5;
+
+    console.log(lineItem.total); // 60
+}
+```
+
+### Reassigning References
+
+Because the reference is just a state property, you can reassign it. The computed property re-tracks its dependencies on its next computation: it starts following the new object and stops following the old one.
+
+```javascript
+{
+    const celsiusA = _Temperature({
+            celsius: 100
+        }),
+        celsiusB = _Temperature({
+            celsius: 0
+        }),
+        display = _Display({
+            temperature: celsiusA
+        });
+
+    console.log(display.label); // '100°C'
+
+    display.temperature = celsiusB;
+
+    console.log(display.label); // '0°C' (now follows celsiusB)
+
+    celsiusA.celsius = -40;
+
+    console.log(display.label); // '0°C' (no longer follows celsiusA)
+}
+```
+
+### Cleaning Up Cross-Object Dependencies
+
+Cross-object tracking creates references between objects: a source object holds references to its dependents so it knows what to recompute when it changes. If a dependent is discarded while its source lives on, that reference would keep the dependent from being garbage collected. Calling `destroy()` on a state object detaches it from every cross-object relationship in both directions. It removes the object from its sources' dependent lists and removes itself as a dependency of anything that read it.
+
+```javascript
+{
+    const temperature = _Temperature({
+            celsius: 20
+        }),
+        display = _Display({
+            temperature
+        });
+
+    console.log(display.label); // '20°C'
+
+    // The display no longer needs to track the temperature.
+    display.destroy();
+
+    // Updating the temperature no longer attempts to recompute the destroyed display.
+    temperature.celsius = 25;
+}
+```
+
+Destroying the source object is equally safe: anything that depended on it simply stops being notified by it.
+
+`State` inherits `[Symbol.dispose]` (from `isotropic-pubsub`, which calls `destroy()`). A state object can also be managed with a `using` declaration. When the block exits, the object is destroyed automatically and detached from all of its cross-object relationships:
+
+```javascript
+{
+    const temperature = _Temperature({
+        celsius: 20
+    });
+
+    {
+        using display = _Display({
+            temperature
+        });
+
+        console.log(display.label); // '20°C'
+    } // display.destroy() runs here, detaching it from temperature
+
+    // Updating the temperature no longer attempts to recompute the destroyed display.
+    temperature.celsius = 25;
 }
 ```
 
@@ -548,7 +720,7 @@ To identify performance issues:
 
 ```javascript
 // Add debug logging
-const _DebugState = _make(_State, {
+const _DebugState = _make('DebugState', _State, {
     _event_state_change (event) {
         console.log('State change:', event.data);
 
@@ -567,7 +739,7 @@ By default, `isotropic-state` silently ignores values that fail validation. If y
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _StrictState = _make(_State, {
+const _StrictState = _make('StrictState', _State, {
     _validateEmail (value) {
         const isValid = !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
@@ -618,7 +790,7 @@ Child classes inherit and can extend parent state and computed properties:
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _Animal = _make(_State, {}, {
+const _Animal = _make('Animal', _State, {}, {
         _computed: {
             description () {
                 return `${this.name} the ${this.species}`;
@@ -633,7 +805,7 @@ const _Animal = _make(_State, {}, {
             }
         }
     }),
-    _Dog = _make(_Animal, {}, {
+    _Dog = _make('Dog', _Animal, {}, {
         _computed: {
             detailedDescription () {
                 return `${this.description} (${this.breed})`;
@@ -672,7 +844,7 @@ Child classes can override the change event complete methods to add custom behav
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _TrackedState = _make(_State, {
+const _TrackedState = _make('TrackedState', _State, {
     // Override the computed property change handler
     _event_computed_change (event) {
         console.log(`Computed property changed: ${event.data.propertyName}`);
@@ -706,6 +878,30 @@ const _TrackedState = _make(_State, {
 });
 ```
 
+### Customizing Dependency Tracking
+
+Dependency tracking is driven by a computation stack stored as a static property on the `State` class. Whenever a computed property runs, the current `{ propertyName, state }` pair is pushed onto the stack; while it sits on top, every property read is recorded as a dependency of that property. When the computation finishes the pair is popped, restoring the enclosing computation if there is one. Because the stack is a single static structure shared across every class and instance, dependencies are tracked correctly even when computations on different objects are nested inside one another.
+
+The stack and its accessors are static methods, so a child class made with `isotropic-make` can extend or replace them, for example, to log every computation or to integrate with an external tracking system. The instance getters reach these through `this.constructor`, so an override on a child class takes effect for that class's instances.
+
+```javascript
+import _make from 'isotropic-make';
+import _State from 'isotropic-state';
+
+const _LoggedState = _make('LoggedState', _State, {}, {
+    _pushComputation (computation) {
+        console.log(`Computing ${computation.propertyName}`);
+
+        // Call parent implementation
+        return Reflect.apply(_State._pushComputation, this, [
+            computation
+        ]);
+    }
+});
+```
+
+The relevant static members are `_computationStack` (the shared array), `_pushComputation({ propertyName, state })`, `_popComputation()`, and `_currentComputation()`. As with everything in Isotropic, these are conventionally internal (underscore-prefixed) but remain fully accessible and overridable.
+
 ### Type Safety Enhancement
 
 While `isotropic-state` doesn't include built-in type checking, you can easily add it as a child class:
@@ -714,7 +910,7 @@ While `isotropic-state` doesn't include built-in type checking, you can easily a
 import _make from 'isotropic-make';
 import _State from 'isotropic-state';
 
-const _TypedState = _make(_State, {
+const _TypedState = _make('TypedState', _State, {
         _validateType (value, type) {
             switch (type) {
                 case 'array':
@@ -768,7 +964,7 @@ const _TypedState = _make(_State, {
             return Reflect.apply(_State._init, this, args);
         }
     }),
-    _User = _make(_TypedState, {}, {
+    _User = _make('User', _TypedState, {}, {
         _state: {
             age: {
                 type: 'number',
@@ -817,6 +1013,7 @@ const _TypedState = _make(_State, {
 ### Instance Methods
 
 - **`batchChanges()`**: Start a new batch of changes
+- **`destroy()`**: Detach the object from all of its cross-object dependency relationships (in both directions) and tear down its event system
 
 ### Static Properties
 
@@ -875,6 +1072,8 @@ const _TypedState = _make(_State, {
 
 `isotropic-state` integrates seamlessly with:
 
+- **isotropic-error**: Produces structured errors (circular dependencies, compute failures, read-only writes)
+- **isotropic-for-in**: Walks the inherited `_state` and `_computed` property chains
 - **isotropic-initializable**: Provides initialization lifecycle
 - **isotropic-later**: Handles asynchronous batching
 - **isotropic-make**: Creates the constructor functions
